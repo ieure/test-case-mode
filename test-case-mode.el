@@ -1,8 +1,11 @@
 ;;; test-case-mode.el --- unit test front-end
 ;;
+;; Copyright (C) 2009-2015 Ian Eure
 ;; Copyright (C) 2009, 2011, 2013 Nikolaj Schumacher
 ;;
 ;; Author: Nikolaj Schumacher <bugs * nschum de>
+;; Author: Ian Eure <ian.eure gmail com>
+;; Maintainer: Ian Eure <ian.eure gmail com>
 ;; Version: 1.0
 ;; Keywords: tools
 ;; URL: http://nschum.de/src/emacs/test-case-mode/
@@ -27,8 +30,8 @@
 ;;; Commentary:
 ;;
 ;; `test-case-mode' is a minor mode for running unit tests.  It is extensible
-;; and currently comes with back-ends for JUnit, CxxTest, CppUnit, gtest, Python
-;; and Ruby.
+;; and currently comes with back-ends for JUnit, CxxTest, CppUnit, gtest,
+;; Python, Ruby, Scala (with SimpleSpec), and Clojure.
 ;;
 ;; The back-ends probably need some more path options to work correctly.
 ;; Please let me know, as I'm not an expert on all of them.
@@ -64,6 +67,22 @@
 ;;    Added support for gtest (google-test).
 ;;    Added support for ERT (Emacs Lisp Regression Testing).
 ;;
+;; 2012-12-28 (0.1.8)
+;;    Fix copyright year. Autoload `test-case-run'. Add
+;;    `test-case-run-or-run-again'.
+;;
+;; 2012-05-17 (0.1.7)
+;;    Support SimpleSpec 0.6.0 & clojure.test. Allow multiple failure
+;;    patterns.
+;;
+;; 2012-04-28 (0.1.5)
+;;    Allow tests to run from other directories. Add SimpleSpec
+;;    backend. Fix some bugs that prevented tests from running. Try
+;;    enabling T-C-M when test-case-run is called.
+;;
+;; 2012-02-01 (0.1.3)
+;;    PHPUnit, Tramp, and nosetests support.
+;;
 ;; 2009-03-30 (0.1)
 ;;    Initial release.
 ;;
@@ -71,7 +90,9 @@
 
 (eval-when-compile (require 'cl))
 (require 'compile)
+(require 'cc-defs)
 (require 'fringe-helper nil t)
+(eval-when-compile (require 'tramp))
 
 (dolist (err '("^test-case-mode not enabled$" "^Test not recognized$"
                "^Moved \\(back before fir\\|past la\\)st failure$"
@@ -83,13 +104,16 @@
   :group 'tools)
 
 (defcustom test-case-backends
-  `(test-case-junit-backend
+  '(test-case-junit-backend
     test-case-ruby-backend
     test-case-cxxtest-backend
     test-case-cppunit-backend
     test-case-gtest-backend
+    test-case-phpunit-backend
     test-case-python-backend
-    test-case-ert-backend)
+    test-case-ert-backend
+    test-case-simplespec-backend
+    test-case-clojuretest-backend)
   "*Test case backends.
 Each function in this list is called with a command, which is one of these:
 
@@ -184,6 +208,7 @@ See `compilation-context-lines'."
   :group 'test-case
   :type '(choice integer (const :tag "No window scrolling" nil)))
 
+
 ;;; faces ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defface test-case-mode-line-success
@@ -249,7 +274,8 @@ See `compilation-context-lines'."
   "*Face used for highlighting file link columns"
   :group 'test-case)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-result-buffer-name "*Test Result*")
 
@@ -285,7 +311,8 @@ See `compilation-context-lines'."
         (push proc processes)))
     processes))
 
-;;; buffer id ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; buffer id ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-buffer-id-string nil)
 (make-variable-buffer-local 'test-case-buffer-id-string)
@@ -304,7 +331,8 @@ See `compilation-context-lines'."
     (add-text-properties 0 (length test-case-buffer-id-string)
                          `(face ,face) test-case-buffer-id-string)))
 
-;;; dot ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; dot ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-dot-keymap
   (let ((map (make-sparse-keymap)))
@@ -325,10 +353,10 @@ See `compilation-context-lines'."
                       :data ,(format "/* XPM */
 static char * data[] = {
 \"18 13 4 1\",
-\" 	c None\",
-\".	c %s\",
-\"x	c %s\",
-\"+	c %s\",
+\"  c None\",
+\". c %s\",
+\"x c %s\",
+\"+ c %s\",
 \"                  \",
 \"       +++++      \",
 \"      +.....+     \",
@@ -379,7 +407,8 @@ mode-line is local before installing."
             (success-modified (test-case-make-dot "dark olive green" "orange"))
             (otherwise (test-case-make-dot "gray10")))))
 
-;;; states ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; states ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-state 'unknown
   "The state of the current buffer test.
@@ -459,7 +488,8 @@ This assumes that no test is still running."
 
         (run-hook-with-args 'test-case-state-change-hook old-state state)))))
 
-;;; global mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; global mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-global-mode-map (make-sparse-keymap)
   "Keymap used by `test-case-global-mode'.")
@@ -474,7 +504,8 @@ This assumes that no test is still running."
     (test-case-set-global-state 'unknown)
     (test-case-remove-dot t)))
 
-;;; mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-lighter " Test"
   "The mode-line string used by ``test-case-mode''.
@@ -487,7 +518,7 @@ It's value represents the test case type.")
 (defun test-case-detect-backend ()
   (when buffer-file-name
     (dolist (backend test-case-backends)
-      (when (funcall backend 'supported)
+      (when (ignore-errors (funcall backend 'supported))
         (setq test-case-backend backend
               test-case-lighter (concat " " (test-case-call-backend 'name)))
         (return t)))))
@@ -567,7 +598,8 @@ and `test-case-mode-line-info-position'."
   (interactive)
   (mapc 'kill-buffer (test-case-buffer-list)))
 
-;;; menu ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; menu ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-menu nil)
 (defvar test-case-minor-mode-menu nil)
@@ -621,7 +653,8 @@ and `test-case-mode-line-info-position'."
   (interactive)
   (popup-menu test-case-menu))
 
-;;; running ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; running ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-last-run nil)
 (defvar test-case-current-run nil)
@@ -656,6 +689,15 @@ and `test-case-mode-line-info-position'."
       (test-case-set-global-state (test-case-calculate-global-state))
       (unless quiet
         (message "Test run aborted")))))
+
+(defun test-case-localname (path)
+  (if (tramp-tramp-file-p path)
+      (with-parsed-tramp-file-name path remote remote-localname)
+    path))
+
+(defun test-case-run-directory (test-buffer)
+  (or (unwind-protect (test-case-call-backend 'directory test-buffer) nil)
+      (file-name-directory (buffer-file-name test-buffer))))
 
 (defun test-case-process-sentinel (proc msg)
   (when (eq (process-status proc) 'exit)
@@ -757,7 +799,7 @@ and `test-case-mode-line-info-position'."
 
 (defun test-case-run-internal (test-buffer result-buffer &optional out-buffer)
   (let* ((file-name (buffer-file-name test-buffer))
-         (default-directory (file-name-directory file-name))
+         (default-directory (test-case-run-directory test-buffer))
          (inhibit-read-only t)
          command beg process)
 
@@ -844,13 +886,14 @@ Tests are run consecutively or concurrently according to
                                   (generate-new-buffer " *Test Run*"))
           (decf processes))))))
 
+;;;###autoload
 (defun test-case-run (&optional buffer)
   "Run the test in the current buffer.
 Calling this aborts all running tests.  To run multiple tests use
 `test-case-run-all' or `test-case-run-buffers'."
   (interactive)
   (with-current-buffer (or buffer (current-buffer))
-    (unless test-case-mode
+    (unless (or test-case-mode (test-case-mode))
       (error "test-case-mode not enabled"))
     (test-case-run-buffers (setq test-case-last-run (list (current-buffer))))))
 
@@ -858,6 +901,17 @@ Calling this aborts all running tests.  To run multiple tests use
   "Run the latest test again."
   (interactive)
   (test-case-run-buffers test-case-last-run))
+
+;;;###autoload
+(defun test-case-run-or-run-again ()
+  "Run current or last test.
+
+   If in a test buffer, run tests in the current buffer. Otherwise,
+   run the last-run test again."
+  (interactive)
+  (if test-case-mode
+      (test-case-run)
+    (test-case-run-again)))
 
 (defun test-case-run-all ()
   "Run `test-case-run-buffers' on all tests currently visited by buffers."
@@ -875,7 +929,8 @@ Install this the following way:
        (equal result "finished\n")
        (test-case-run-all)))
 
-;;; results ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; results ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-error-pos nil)
 (make-variable-buffer-local 'test-case-error-pos)
@@ -1015,7 +1070,8 @@ Install this the following way:
 (defun test-case-failure-message-at-point ()
   (get-char-property (point) 'test-case-message))
 
-;;; echo failure messages ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; echo failure messages ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-echo-failure-mode-map (make-sparse-keymap))
 
@@ -1032,7 +1088,8 @@ Install this the following way:
       (add-hook 'post-command-hook 'test-case-echo-failure-at-point nil t)
     (remove-hook 'post-command-hook 'test-case-echo-failure-at-point t)))
 
-;;; next-error ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; next-error ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun test-case-next-error (arg)
   (let ((pos test-case-error-pos))
@@ -1064,7 +1121,8 @@ Install this the following way:
           (test-case-next-error arg)))
   (test-case-follow-link test-case-error-pos))
 
-;;; follow-mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; follow-mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defvar test-case-result-follow-last-link nil)
 (make-variable-buffer-local 'test-case-follow-last-link)
@@ -1094,6 +1152,7 @@ Customize `next-error-highlight' to modify the highlighting."
           (save-excursion
             (test-case-follow-link beg)))))))
 
+
 ;;; back-end utils ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun test-case-grep (regexp)
@@ -1129,68 +1188,21 @@ CLASS and NAMESPACE need to be `regexp-quote'd."
                               (regexp-opt '("public" "private" "protected")))
                             "\s+" class))))
 
-;;; junit ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; junit ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defcustom test-case-junit-java-executable (executable-find "java")
-  "The Java executable used to run JUnit tests."
+(defcustom test-case-junit-mvn-executable (executable-find "mvn")
+  "The Maven executable used to run JUnit tests."
   :group 'test-case
   :type 'file)
 
-(defcustom test-case-junit-java-arguments "-ea"
+(defcustom test-case-junit-mvn-arguments "-q"
   "The command line arguments used to run JUnit tests."
   :group 'test-case
   :type 'string)
 
-(defcustom test-case-junit-classpath
-  '(test-case-junit-guess-root
-    test-case-junit-jde-classpath
-    test-case-junit-classpath-from-env)
-  "*Directories that make up the CLASSPATH for JUnit tests.
-Instead of directories, each element can also be a function returning a
-CLASSPATH for the current buffer."
-  :group 'test-case
-  :type '(repeat (choice (function :tag "Function")
-                         (directory :tag "Directory"))))
-
-(defun test-case-junit-build-classpath ()
-  (mapconcat (lambda (entry) (or (if (stringp entry) entry (funcall entry)) ""))
-             test-case-junit-classpath
-             ":"))
-
-(defun test-case-junit-classpath-from-env ()
-  "Return the value of the CLASSPATH environment variable."
-  (getenv "CLASSPATH"))
-
 (defun test-case-junit-grep-package ()
   (test-case-grep "package\\s +\\([[:alnum:].]+\\)\\s *;"))
-
-(defun test-case-junit-guess-root ()
-  "Guess the classpath for a JUnit test by looking at the package.
-If the classpath ends in \"src/\", the same path is added again using \"bin/\".
-Additionally the CLASSPATH environment variable is used."
-  (let ((package (test-case-junit-grep-package))
-        (path (nreverse (cons "" (split-string buffer-file-name "/" t))))
-        root)
-    (when package
-      (setq path (nthcdr (1+ (length (split-string package "\\." t))) path))
-      (or (and (equal (car path) "src")
-               (setq root (mapconcat 'identity
-                                     (reverse (cons "bin" (cdr path))) "/"))
-               (file-exists-p root)
-               root)
-          (mapconcat 'identity (nreverse path) "/")))))
-
-(defun test-case-junit-jde-classpath ()
-  (when (derived-mode-p 'jde-mode)
-    (with-no-warnings
-      (let ((classpath (if jde-compile-option-classpath
-                           jde-compile-option-classpath
-                         (jde-get-global-classpath)))
-            (symbol (if 'jde-compile-option-classpath
-                        'jde-compile-option-classpath
-                      'jde-global-classpath)))
-        (when classpath
-          (jde-build-classpath classpath symbol))))))
 
 (defun test-case-junit-class ()
   (let ((package (test-case-junit-grep-package))
@@ -1200,10 +1212,16 @@ Additionally the CLASSPATH environment variable is used."
         (concat package "." class)
       class)))
 
+(defun test-case-junit-directory ()
+  (let ((repo (locate-dominating-file (buffer-file-name) ".git")))
+    (if (not (file-exists-p (concat repo "pom.xml")))
+        (locate-dominating-file (buffer-file-name) "pom.xml"))
+    repo))
+
 (defun test-case-junit-command ()
-  (format "%s %s -classpath %s org.junit.runner.JUnitCore %s"
-          test-case-junit-java-executable test-case-junit-java-arguments
-          (test-case-junit-build-classpath) (test-case-junit-class)))
+  (format "%s %s test -Dtest=%s -DfailIfNoTests=false"
+          test-case-junit-mvn-executable test-case-junit-mvn-arguments
+          (test-case-junit-class)))
 
 (defvar test-case-junit-font-lock-keywords
   (eval-when-compile
@@ -1229,13 +1247,18 @@ Additionally the CLASSPATH environment variable is used."
     (list (concat "\\(" test-case-junit-assertion-re "\\)?"
                   test-case-junit-backtrace-re-1 file
                   test-case-junit-backtrace-re-2)
-          5 6 nil 4 2)))
+      5 6 nil 4 2)))
 
 (defvar test-case-junit-import-regexp
-  "import\\s +junit\\.framework\\.\\(TestCase\\|\\*\\)")
+  "import\\s +\\(static\\s +\\)?\\(org\.\\)?junit"
+  "Matches any import from the junit or org.junit packages.")
 
 (defvar test-case-junit-extends-regexp
-  "extends\\s +TestCase")
+      "extends\\s +\\(TestCase\\|TestSuite\\)")
+
+(defvar test-case-junit-test-regexp
+  "@\\(org.junit.\\)?Test"
+  "Matches a @Test or @org.junit.Test annotation.")
 
 (defun test-case-junit-backend (command)
   "JUnit back-end for `test-case-mode'.
@@ -1244,14 +1267,221 @@ configured correctly.  The classpath is determined by
 `test-case-junit-classpath-func' and guessed by default."
   (case command
     ('name "JUnit")
+    ('save t)
     ('supported (and (derived-mode-p 'java-mode)
-                     (test-case-grep test-case-junit-import-regexp)
-                     (test-case-grep test-case-junit-extends-regexp)))
+                     (or (test-case-grep test-case-junit-test-regexp)
+                      (test-case-grep test-case-junit-import-regexp)
+                      (test-case-grep test-case-junit-extends-regexp))))
     ('command (test-case-junit-command))
+    ('directory (test-case-junit-directory))
     ('failure-pattern (test-case-junit-failure-pattern))
     ('font-lock-keywords test-case-junit-font-lock-keywords)))
 
-;; ruby ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; simplespec ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defcustom test-case-simplespec-mvn-executable (executable-find "mvn")
+  "The Maven executable used to run Simplespec tests."
+  :group 'test-case
+  :type 'file)
+
+(defcustom test-case-simplespec-mvn-arguments ""
+  "The command line arguments used to run Simplespec tests."
+  :group 'test-case
+  :type 'string)
+
+(defcustom test-case-simplespec-class-pattern
+  "class\\s-+\\([a-zA-Z0-9]+Spec\\)\\b\\s-+"
+  "The pattern to use to match SimpleSpec test classes."
+  :group 'test-case
+  :type 'regexp)
+
+(defconst test-case-simplespec-assertion-re
+  "java\\.lang\\.AssertionError: \\(.*\\)
+\\(^[ \t]+at .*
+\\)*?")
+
+(defalias 'test-case-simplespec-grep-package 'test-case-junit-grep-package)
+
+(defun test-case-simplespec-classes ()
+  "Return a list of SimpleSpec test classes in the current buffer."
+  (save-excursion
+    (save-match-data
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (let ((matches))
+          (while (re-search-forward test-case-simplespec-class-pattern nil t)
+            (setq matches (cons (match-string-no-properties 1) matches)))
+          matches)))))
+
+(defun test-case-simplespec-command ()
+  (let ((test-classes (test-case-simplespec-classes)))
+    (unless test-classes
+      (error "No test classes found in this file. Check test-case-simplespec-class-pattern?"))
+    (format "%s %s test -Dtest=%s"
+            test-case-simplespec-mvn-executable
+            test-case-simplespec-mvn-arguments
+            (c-concat-separated test-classes ","))))
+
+(defun test-case-simplespec-directory ()
+  (locate-dominating-file (buffer-file-name) ".git"))
+
+(defvar test-case-simplespec-font-lock-keywords
+  (eval-when-compile
+    `((,(concat (concat "\\.must(.*"
+                        (regexp-opt '("be" "equal" "not" "haveSize"
+                                      "contain" "approximately" "lessThan.*"
+                                      "greaterThan.*" "startWith" "endWith"
+                                      "match"))
+                        ")"))
+       (0 'test-case-assertion prepend)))))
+
+(defun test-case-simplespec-failure-pattern ()
+  (let ((file (regexp-quote (file-name-nondirectory buffer-file-name))))
+    (list (concat "\\(" test-case-simplespec-assertion-re "\\)?"
+                  test-case-junit-backtrace-re-1 file
+                  test-case-junit-backtrace-re-2)
+          5 6 nil 4 2)))
+
+(defvar test-case-simplespec-import-regexp
+  "import\\s +com.\\(codahale\\|simple\\).simplespec")
+
+(defvar test-case-simplespec-extends-regexp
+  "extends\\s +\\w*Spec\\w*")
+
+(defun test-case-simplespec-backend (command)
+  "Simplespec back-end for `test-case-mode'."
+  (case command
+    ('name "Simplespec")
+    ('save t)
+    ('supported (and (derived-mode-p 'scala-mode)
+                     (or
+                      (test-case-grep test-case-simplespec-import-regexp)
+                      (test-case-grep test-case-simplespec-extends-regexp))
+                     t))
+    ('command (test-case-simplespec-command))
+    ('directory (test-case-simplespec-directory))
+    ('failure-pattern (test-case-simplespec-failure-pattern))
+    ('font-lock-keywords test-case-simplespec-font-lock-keywords)))
+
+
+;;; clojure.test;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defcustom test-case-clojuretest-lein-executable (executable-find "lein")
+  "The leiningen executable used to run Clojure tests."
+  :group 'test-case
+  :type 'file)
+
+(defconst test-case-clojuretest-font-lock-keywords
+  `((,(concat "(\\(" (regexp-opt '("is" "are"
+                                  "assert-any" "assert-predicate")) "\\)\\b")
+     (1 'test-case-assertion prepend))))
+
+(defun test-case-clojuretest-grep-package ()
+  (save-excursion
+    (save-match-data
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (search-forward "(ns " nil t)
+        (goto-char (match-beginning 0))
+        (search-forward "clojure\.test" (scan-sexps (point) 1) t)))))
+
+(defun test-case-clojuretest-namespace ()
+  (save-restriction
+    (widen)
+    (clojure-find-ns)))
+
+(defun test-case-clojuretest-command ()
+  (let ((ns (test-case-clojuretest-namespace)))
+    (unless ns
+      (error "This doesn't seem to be Clojure code."))
+    (format "%s test %s"
+            test-case-clojuretest-lein-executable ns)))
+
+(defun test-case-clojuretest-directory ()
+  (locate-dominating-file (buffer-file-name) "project.clj"))
+
+(defconst test-case-clojuretest-failure-pattern
+  '("FAIL in ([^)]+) (\\([^:]+\\):\\([0-9]+\\))[\0-\377[:nonascii:]]*?\\(\\s-*expected: .*\n\\s-*actual: .*\\)" 1 2 nil 0 3))
+
+;; FIXME add these back in
+(defun test-case-clojuretest-error-pattern ()
+  (let ((file (regexp-quote (file-name-nondirectory buffer-file-name))))
+    (list (format "ERROR in .*\n.*\n\\(\\s-*expected: .*\n\\s-*actual: .*\\)[\0-\377[:nonascii:]]*?\n\s-*at[\0-\377[:nonascii:]]*?%s.*(\\(%s\\):\\([0-9]+\\))[\0-\377[:nonascii:]]*?\n\n" (regexp-quote (test-case-clojuretest-namespace)) file)
+          2 3 nil 0 1)))
+
+(defun test-case-clojuretest-compilation-error-pattern ()
+  (let ((file (regexp-quote (file-name-nondirectory buffer-file-name))))
+    (list (format "Exception in thread \".*?\" \\(.*?\\), compiling:(.*\\(%s\\):\\([0-9]+\\))" file)
+          2 3 nil nil 1)))
+
+(defun test-case-clojuretest-backend (command)
+  "Clojure.test back-end for `test-case-mode'."
+  (case command
+    ('name "clojure.test")
+    ('save t)
+    ('supported (and (derived-mode-p 'clojure-mode)
+                     (test-case-clojuretest-grep-package)
+                     t))
+    ('command (test-case-clojuretest-command))
+    ('directory (test-case-clojuretest-directory))
+    ('failure-pattern test-case-clojuretest-failure-pattern)
+    ('font-lock-keywords test-case-clojuretest-font-lock-keywords)))
+
+
+;; php ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defcustom test-case-phpunit-executable (executable-find "phpunit")
+  "The phpunit executable used to run PHPUnit tests."
+  :group 'test-case
+  :type 'file)
+
+(defcustom test-case-phpunit-arguments ""
+  "The command line arguments used to run PHPUnit tests."
+  :group 'test-case
+  :type 'string)
+
+(defconst test-case-phpunit-failure-pattern
+  '("^[0-9]+)\s+\\(.*\\)\n\\(Failed.*\\)\n\\([^:]+\\):\\([0-9]+\\)"
+    3 4 nil 2 0)
+  "Regular expression for matchin PHPUnit failute output.")
+
+(defconst test-case-phpunit-test-pattern
+  "\\<extends\\>.*Tests?_?\\(Case\\|Suite\\)?"
+  "Regular expression for locating classes which extend PHPUnit.")
+
+(defconst test-case-phpunit-font-lock-keywords
+  '("\\<$this->assert[^\s(]+\\>"
+    (0 'test-case-assertion prepend))
+  "Regular expression for PHPUnit assertions.")
+
+(defconst test-case-phpunit-class-pattern
+  "class\s+\\([^\s]*Test[^\s]*\\)"
+  "Regular expression for matchin PHPUnit test class names.")
+
+(defun test-case-phpunit-find-test-class ()
+  "Determine the name of the test class"
+  (test-case-grep test-case-phpunit-class-pattern))
+
+(defun test-case-phpunit-backend (command)
+  "PHPUnit back-end for `test-case-mode'."
+  (case command
+    ('name "PHPUnit")
+    ('supported (and (derived-mode-p 'php-mode)
+                     (test-case-grep test-case-phpunit-test-pattern)
+                     t))
+    ('command (format "%s %s %s %s" test-case-phpunit-executable
+                      test-case-phpunit-arguments
+                      (test-case-phpunit-find-test-class)
+                      (test-case-localname buffer-file-name)))
+    ('save t)
+    ('failure-patterns test-case-phpunit-failure-pattern)
+    ('font-lock-keywords test-case-phpunit-font-lock-keywords)))
+
+
+;; ruby ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defcustom test-case-ruby-executable (executable-find "ruby")
   "The Ruby executable used to run Ruby tests."
@@ -1308,11 +1538,22 @@ configured correctly.  The classpath is determined by
 (defvar test-case-python-font-lock-keywords
   (eval-when-compile
     `((,(concat
-         "\\_<assert" (regexp-opt '("AlmostEqual" "Equal" "False" "Raises"
-                                    "NotAlmostEqual" "NotEqual" "True" "_") t)
-         "\\|fail" (regexp-opt '("" "If" "IfAlmostEqual" "IfEqual" "Unless"
-                                 "UnlessAlmostEqual" "UnlessEqual"
-                                 "UnlessRaises" "ureException"))
+         "\\_<assert" (regexp-opt '("Equal" "NotEqual" "True" "False" "Is"
+                                    "IsNot" "IsNone" "IsNotNone" "In" "NotIn"
+                                    "IsInstance" "NotIsInstance" "Raises"
+                                    "RaisesRegex" "Warns" "WarnsRegex"
+                                    "AlmostEqual" "NotAlmostEqual" "Greater"
+                                    "GreaterEqual" "Less" "LessEqual" "Regex"
+                                    "NotRegex" "CountEqual" "MultiLineEqual"
+                                    "SequenceEqual" "ListEqual" "TupleEqual"
+                                    "SetEqual" "DictEqual" "RegexpMatches"
+                                    "NotRegexpMatches" "ItemsEqual"
+                                    "DictContainsSubset" "Equals" "NotEquals"
+                                    "_" "AlmostEquals" "NotAlmostEquals"
+                                    "RegexpMatches" "RaisesRegexp") t)
+         "\\|fail" (regexp-opt '("" "UnlessEqual" "IfEqual" "Unless" "If"
+                                 "UnlessRaises" "UnlessAlmostEqual"
+                                 "IfAlmostEqual"))
          "\\_>")
        (0 'test-case-assertion prepend)))))
 
@@ -1329,13 +1570,16 @@ configured correctly.  The classpath is determined by
   (case command
     ('name "PyUnit")
     ('supported (and (derived-mode-p 'python-mode)
-                     (test-case-grep "\\_<import\s+unittest\\_>")))
-    ('command (concat test-case-python-executable " " buffer-file-name))
+                     (or (test-case-grep "\\_<import\s+unittest\\_>")
+                         (test-case-grep "\\_<import\s+nose\\_>"))))
+    ('command (concat test-case-python-executable " "
+                      (test-case-localname buffer-file-name)))
     ('save t)
     ('failure-pattern (test-case-python-failure-pattern))
     ('font-lock-keywords test-case-python-font-lock-keywords)))
 
-;; cxxtest ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; cxxtest ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defcustom test-case-cxxtest-executable-name-func 'file-name-sans-extension
   "A function that returns the executable name for a cxxtest test."
@@ -1356,7 +1600,7 @@ configured correctly.  The classpath is determined by
 
 (defun test-case-cxxtest-command ()
   (let ((executable (funcall test-case-cxxtest-executable-name-func
-                             buffer-file-name)))
+                             (test-case-localname buffer-file-name))))
     (unless (file-exists-p executable)
       (error "Executable %s not found" executable))
     (when (file-newer-than-file-p buffer-file-name executable)
@@ -1394,7 +1638,8 @@ customize `test-case-cxxtest-executable-name-func'"
     ('failure-pattern (test-case-cxxtest-failure-pattern))
     ('font-lock-keywords test-case-cxxtest-font-lock-keywords)))
 
-;; cppunit ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; cppunit ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defcustom test-case-cppunit-executable-name-func 'file-name-sans-extension
   "A function that returns the executable name for a CppUnit test."
@@ -1414,7 +1659,7 @@ customize `test-case-cxxtest-executable-name-func'"
 
 (defun test-case-cppunit-command ()
   (let ((executable (funcall test-case-cppunit-executable-name-func
-                             buffer-file-name)))
+                             (test-case-localname buffer-file-name))))
     (unless (file-exists-p executable)
       (error "Executable %s not found" executable))
     (when (file-newer-than-file-p buffer-file-name executable)
@@ -1451,6 +1696,7 @@ customize `test-case-cppunit-executable-name-func'"
     ('failure-pattern (test-case-cppunit-failure-pattern))
     ('font-lock-keywords test-case-cppunit-font-lock-keywords)))
 
+
 ;; google-test ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defcustom test-case-gtest-executable-name-func 'file-name-sans-extension
@@ -1509,6 +1755,7 @@ name as the test, but without the extension.  If it doesn't, customize
     ('failure-pattern (test-case-gtest-failure-pattern))
     ('font-lock-keywords test-case-gtest-font-lock-keywords)))
 
+
 ;; ERT ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defcustom test-case-erc-emacs-executable (car command-line-args)
@@ -1519,7 +1766,7 @@ name as the test, but without the extension.  If it doesn't, customize
 (defun test-case-ert-p ()
   (and (derived-mode-p 'emacs-lisp-mode)
        (test-case-grep "([ \t]*ert-deftest")
-       (not (test-case-grep ";;; ert.el --- Emacs Lisp Regression Testing"))))
+       (not (test-case-grep "^\\s *;;; ert.el --- Emacs Lisp Regression Testing"))))
 
 (defun test-case-ert-command ()
   (format "%s -batch -l ert.el -L %s -l %s -f ert-run-tests-batch-and-exit"
@@ -1550,6 +1797,55 @@ name as the test, but without the extension.  If it doesn't, customize
     ('failure-pattern test-case-ert-failure-pattern)
     ('failure-locate-func 'test-case-ert-search-test)
     ('font-lock-keywords test-case-ert-font-lock-keywords)))
+
+
+;; Tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(ert-deftest test-case-localname-test ()
+  "Test stripping TRAMP prefixes."
+  (should (string= "foo/bar.py"
+                   (test-case-localname "foo/bar.py")))
+  (should (string= "foo/bar.py"
+                   (test-case-localname "/ssh:user@host:foo/bar.py")))
+  (should (string= "/foo/bar.py"
+                   (test-case-localname "/ssh:user@host:/foo/bar.py"))))
+
+(ert-deftest test-case-ert-p-test ()
+  "test-case-mode should be runnable with ERT."
+  (should
+   (with-temp-buffer
+     (find-file "test-case-mode.el")
+     (test-case-ert-p))))
+
+(ert-deftest test-junit-enabled ()
+    (should
+     (with-temp-buffer
+       ;; (require 'cc-mode)
+       (setq major-mode 'java-mode)
+       (insert "import static org.junit.Assert.*;\n")
+       (test-case-junit-backend 'supported)))
+
+    (should
+     (with-temp-buffer
+       (require 'cc-mode)
+       (setq major-mode 'java-mode)
+       (insert "import org.junit.Test;\n\n")
+       (insert "public class Foo { @Test public void testFoo() {}}\n")
+       (test-case-junit-backend 'supported)))
+
+    (should
+     (with-temp-buffer
+       (require 'cc-mode)
+       (setq major-mode 'java-mode)
+       (insert "public class Foo { @org.junit.Test public void testFoo() {}}")
+       (test-case-junit-backend 'supported)))
+
+  (should
+   (with-temp-buffer
+     (require 'cc-mode)
+     (setq major-mode 'java-mode)
+     (insert "import junit.framework.TestSuite;\n")
+     (test-case-junit-backend 'supported))))
 
 (provide 'test-case-mode)
 ;;; test-case-mode.el ends here
