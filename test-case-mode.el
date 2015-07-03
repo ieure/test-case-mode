@@ -487,12 +487,8 @@ This assumes that no test is still running."
 
         (run-hook-with-args 'test-case-state-change-hook old-state state)))))
 
-<<<<<<< HEAD
 
 ;;; global mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-=======
-;;; global mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
->>>>>>> upstream-master
 
 (defvar test-case-global-mode-map (make-sparse-keymap)
   "Keymap used by `test-case-global-mode'.")
