@@ -6,19 +6,17 @@ Unit test front-end for Emacs
 [![Build Status](https://travis-ci.org/nschum/test-case-mode.png?branch=master)](https://travis-ci.org/nschum/test-case-mode)
 
 `test-case-mode` is a minor mode for running unit tests.  It is extensible and
-currently comes with back-ends for JUnit, CxxTest, CppUnit, gtest, Python and
-Ruby.
+currently comes with back-ends for JUnit, CxxTest, CppUnit, gtest, Python (unittest & nosetests), Ruby, SimpleSpec, and clojure.test.
 
 The back-ends probably need some more path options to work correctly.
 Please let me know, as I'm not an expert on all of them.
 
-To install test-case-mode, add the following to your .emacs:
+It’s [available in Marmalade](http://marmalade-repo.org/packages/test-case-mode); please install from there:
 
-    (add-to-list 'load-path "/path/to/test-case-mode")
-    (autoload 'test-case-mode "test-case-mode" nil t)
-    (autoload 'enable-test-case-mode-if-test "test-case-mode")
-    (autoload 'test-case-find-all-tests "test-case-mode" nil t)
-    (autoload 'test-case-compilation-finish-run-all "test-case-mode")
+- `M-x package-list-packages`
+- `C-s test-case-mode`
+- `i`
+- `x`
 
 To enable it automatically when opening test files:
 
