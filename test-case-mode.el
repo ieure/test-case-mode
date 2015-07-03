@@ -92,6 +92,7 @@
 (require 'compile)
 (require 'cc-defs)
 (require 'fringe-helper nil t)
+(eval-when-compile (require 'tramp))
 
 (dolist (err '("^test-case-mode not enabled$" "^Test not recognized$"
                "^Moved \\(back before fir\\|past la\\)st failure$"
@@ -1249,7 +1250,7 @@ CLASS and NAMESPACE need to be `regexp-quote'd."
       5 6 nil 4 2)))
 
 (defvar test-case-junit-import-regexp
-  "import\\s +\\(static\\s +\\)?\\(org\.\\)?junit)"
+  "import\\s +\\(static\\s +\\)?\\(org\.\\)?junit"
   "Matches any import from the junit or org.junit packages.")
 
 (defvar test-case-junit-extends-regexp
@@ -1796,6 +1797,55 @@ name as the test, but without the extension.  If it doesn't, customize
     ('failure-pattern test-case-ert-failure-pattern)
     ('failure-locate-func 'test-case-ert-search-test)
     ('font-lock-keywords test-case-ert-font-lock-keywords)))
+
+
+;; Tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(ert-deftest test-case-localname-test ()
+  "Test stripping TRAMP prefixes."
+  (should (string= "foo/bar.py"
+                   (test-case-localname "foo/bar.py")))
+  (should (string= "foo/bar.py"
+                   (test-case-localname "/ssh:user@host:foo/bar.py")))
+  (should (string= "/foo/bar.py"
+                   (test-case-localname "/ssh:user@host:/foo/bar.py"))))
+
+(ert-deftest test-case-ert-p-test ()
+  "test-case-mode should be runnable with ERT."
+  (should
+   (with-temp-buffer
+     (find-file "test-case-mode.el")
+     (test-case-ert-p))))
+
+(ert-deftest test-junit-enabled ()
+    (should
+     (with-temp-buffer
+       ;; (require 'cc-mode)
+       (setq major-mode 'java-mode)
+       (insert "import static org.junit.Assert.*;\n")
+       (test-case-junit-backend 'supported)))
+
+    (should
+     (with-temp-buffer
+       (require 'cc-mode)
+       (setq major-mode 'java-mode)
+       (insert "import org.junit.Test;\n\n")
+       (insert "public class Foo { @Test public void testFoo() {}}\n")
+       (test-case-junit-backend 'supported)))
+
+    (should
+     (with-temp-buffer
+       (require 'cc-mode)
+       (setq major-mode 'java-mode)
+       (insert "public class Foo { @org.junit.Test public void testFoo() {}}")
+       (test-case-junit-backend 'supported)))
+
+  (should
+   (with-temp-buffer
+     (require 'cc-mode)
+     (setq major-mode 'java-mode)
+     (insert "import junit.framework.TestSuite;\n")
+     (test-case-junit-backend 'supported))))
 
 (provide 'test-case-mode)
 ;;; test-case-mode.el ends here
